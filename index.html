@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>Virtual Hand - Cylinders</title>
+  <title>Virtual Hand - Filled Palm with Nodes</title>
 
   <style>
     body {
@@ -19,7 +19,7 @@
       height: 240px;
       opacity: 0.3;
       z-index: 1;
-      transform: scaleX(-1);
+      transform: scaleX(-1); /* カメラ映像を鏡像に */
     }
 
     canvas {
@@ -47,22 +47,26 @@ import {
 // =======================
 
 const config = {
-  colorHand1: "#00ffff",
-  colorHand2: "#ff00ff",
-  thickness: 0.025
+  colorHand1: "#00ffff", // シアン
+  colorHand2: "#ff00ff", // マゼンタ
+  thickness: 0.025,
+  nodeSize: 0.03, // ノード（球体）のサイズ
+  showPalm: true // 手のひらを埋めるかどうか
 };
 
 const gui = new GUI();
 
 gui.addColor(config, "colorHand1").name("右手/1手目の色").onChange(v => {
-  handsData[0].material.color.set(v);
+  handsData[0].materials.forEach(m => m.color.set(v));
 });
 
 gui.addColor(config, "colorHand2").name("左手/2手目の色").onChange(v => {
-  handsData[1].material.color.set(v);
+  handsData[1].materials.forEach(m => m.color.set(v));
 });
 
 gui.add(config, "thickness", 0.005, 0.08, 0.001).name("線の太さ");
+gui.add(config, "nodeSize", 0.01, 0.1, 0.001).name("ノードの大きさ");
+gui.add(config, "showPalm").name("手のひらを埋める");
 
 
 // =======================
@@ -78,7 +82,7 @@ const camera = new THREE.PerspectiveCamera(
   100
 );
 
-camera.position.z = 2;
+camera.position.z = 2.5; // 少し遠くから見る
 
 const renderer = new THREE.WebGLRenderer({
   antialias: true
@@ -96,7 +100,7 @@ scene.add(ambientLight);
 
 
 // =======================
-// 手の接続関係
+// 手の接続構造
 // =======================
 
 const HAND_CONNECTIONS = [
@@ -110,34 +114,44 @@ const HAND_CONNECTIONS = [
   [13, 14], [14, 15], [15, 16],
   // 小指
   [0, 17], [17, 18], [18, 19], [19, 20],
-  // 手のひら
+  // 手のひらのベース
   [5, 9], [9, 13], [13, 17]
 ];
 
+// 手のひらを形成するランドマークのインデックス
+// リスト(0) -> 親指の付け根(1) -> 各指の付け根(5,9,13,17) -> リスト(0)
+const PALM_LANDMARKS = [0, 1, 5, 9, 13, 17];
+
 
 // =======================
-// 太い線（円柱）の生成
+// 3Dオブジェクトの生成
 // =======================
 
 const MAX_HANDS = 2;
 const handsData = [];
 
-// 再利用する円柱ジオメトリ（高さ1の単位円柱）
+// 単位円柱と単位球体のジオメトリ
 const cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 12);
-// 原点を底面に合わせることで伸縮時の位置計算を容易化
 cylinderGeometry.translate(0, 0.5, 0);
 cylinderGeometry.rotateX(Math.PI / 2);
 
+const sphereGeometry = new THREE.SphereGeometry(1, 16, 16);
+
 for (let h = 0; h < MAX_HANDS; h++) {
 
+  // マテリアル（点、線、手のひらで共通）
   const material = new THREE.MeshStandardMaterial({
     color: h === 0 ? config.colorHand1 : config.colorHand2,
     roughness: 0.3,
-    metalness: 0.2
+    metalness: 0.2,
+    side: THREE.DoubleSide // 手のひらの両面を描画
   });
 
   const bones = [];
+  const nodes = [];
+  let palmMesh = null;
 
+  // 1. 関節の線（円柱）
   for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
     const mesh = new THREE.Mesh(cylinderGeometry, material);
     mesh.visible = false;
@@ -145,7 +159,25 @@ for (let h = 0; h < MAX_HANDS; h++) {
     bones.push(mesh);
   }
 
-  handsData.push({ bones, material });
+  // 2. 関節のノード（球体）
+  for (let i = 0; i < 21; i++) {
+    const mesh = new THREE.Mesh(sphereGeometry, material);
+    mesh.visible = false;
+    scene.add(mesh);
+    nodes.push(mesh);
+  }
+
+  // 3. 手のひら（ShapeGeometry）
+  // 初期状態では空のジオメトリ
+  const palmGeometry = new THREE.BufferGeometry();
+  palmMesh = new THREE.Mesh(palmGeometry, material);
+  palmMesh.visible = false;
+  scene.add(palmMesh);
+
+  // マテリアルを管理（GUIでの色変更用）
+  const materials = [material];
+
+  handsData.push({ bones, nodes, palmMesh, materials, material });
 }
 
 
@@ -168,7 +200,7 @@ const handLandmarker = await HandLandmarker.createFromOptions(
       modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
     },
     runningMode: "VIDEO",
-    numHands: 2
+    numHands: MAX_HANDS
   }
 );
 
@@ -195,6 +227,8 @@ async function render() {
       // 非表示初期化
       for (let h = 0; h < MAX_HANDS; h++) {
         handsData[h].bones.forEach(b => b.visible = false);
+        handsData[h].nodes.forEach(n => n.visible = false);
+        handsData[h].palmMesh.visible = false;
       }
 
       if (results.landmarks) {
@@ -204,14 +238,15 @@ async function render() {
           const landmarks = results.landmarks[h];
           const hand = handsData[h];
 
-          // 3D座標の抽出
+          // 3D座標の抽出と変換
           const positions = landmarks.map(p => new THREE.Vector3(
-            -(p.x - 0.5) * 2.5,
-            -(p.y - 0.5) * 2,
-            -p.z * 2
+            -(p.x - 0.5) * 3, // X軸反転 & スケール
+            -(p.y - 0.5) * 2.5, // Y軸反転 & スケール
+            -p.z * 2.5 // Z軸スケール
           ));
 
-          // 各接続（骨格）を更新
+
+          // 1. 各接続（骨格）を更新
           for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
 
             const [startIndex, endIndex] = HAND_CONNECTIONS[i];
@@ -219,26 +254,51 @@ async function render() {
             const endPos = positions[endIndex];
 
             const bone = hand.bones[i];
-
-            // 距離（長さ）の計算
             const distance = startPos.distanceTo(endPos);
 
             if (distance > 0) {
-              // 1. 位置の設定
               bone.position.copy(startPos);
-
-              // 2. 向きの設定（始点から終点へ向かせる）
               bone.lookAt(endPos);
-
-              // 3. スケールの設定（太さと長さを適用）
-              bone.scale.set(
-                config.thickness,
-                config.thickness,
-                distance
-              );
-
+              bone.scale.set(config.thickness, config.thickness, distance);
               bone.visible = true;
             }
+          }
+
+          // 2. 各関節のノードを更新
+          for (let i = 0; i < landmarks.length; i++) {
+            const node = hand.nodes[i];
+            node.position.copy(positions[i]);
+            node.scale.setScalar(config.nodeSize);
+            node.visible = true;
+          }
+
+          // 3. 手のひらを埋める
+          if (config.showPalm) {
+            // 手のひらを形成する点の座標を抽出
+            const palmPoints = PALM_LANDMARKS.map(idx => positions[idx]);
+
+            // Shapeを作成
+            const palmShape = new THREE.Shape();
+            // 始点に移動（リスト: 0）
+            palmShape.moveTo(palmPoints[0].x, palmPoints[0].y);
+            // 他の点を結ぶ
+            for (let i = 1; i < palmPoints.length; i++) {
+              palmShape.lineTo(palmPoints[i].x, palmPoints[i].y);
+            }
+            // 始点に戻る
+            palmShape.closePath();
+
+            // 新しいジオメトリを生成して更新
+            if (hand.palmMesh.geometry) {
+              hand.palmMesh.geometry.dispose(); // 古いジオメトリを解放
+            }
+            hand.palmMesh.geometry = new THREE.ShapeGeometry(palmShape);
+
+            // Z座標を設定（平均的なZ座標にするなどして、指の間に配置）
+            const avgZ = palmPoints.reduce((sum, p) => sum + p.z, 0) / palmPoints.length;
+            hand.palmMesh.position.z = avgZ;
+
+            hand.palmMesh.visible = true;
           }
         }
       }
