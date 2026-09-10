@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>Virtual Hand - Two Hands</title>
+  <title>Virtual Hand - Cylinders</title>
 
   <style>
     body {
@@ -19,7 +19,7 @@
       height: 240px;
       opacity: 0.3;
       z-index: 1;
-      transform: scaleX(-1); /* カメラ映像を鏡像表示に修正 */
+      transform: scaleX(-1);
     }
 
     canvas {
@@ -34,6 +34,7 @@
 <script type="module">
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.161/build/three.module.js";
+import { GUI } from "https://cdn.jsdelivr.net/npm/three@0.161/examples/jsm/libs/lil-gui.module.min.js";
 
 import {
   HandLandmarker,
@@ -42,7 +43,30 @@ import {
 
 
 // =======================
-// Three.js
+// Config / GUI Settings
+// =======================
+
+const config = {
+  colorHand1: "#00ffff",
+  colorHand2: "#ff00ff",
+  thickness: 0.025
+};
+
+const gui = new GUI();
+
+gui.addColor(config, "colorHand1").name("右手/1手目の色").onChange(v => {
+  handsData[0].material.color.set(v);
+});
+
+gui.addColor(config, "colorHand2").name("左手/2手目の色").onChange(v => {
+  handsData[1].material.color.set(v);
+});
+
+gui.add(config, "thickness", 0.005, 0.08, 0.001).name("線の太さ");
+
+
+// =======================
+// Three.js Setup
 // =======================
 
 const scene = new THREE.Scene();
@@ -63,18 +87,16 @@ const renderer = new THREE.WebGLRenderer({
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
-
-// ライト
 const light = new THREE.DirectionalLight(0xffffff, 3);
 light.position.set(0, 1, 2);
 scene.add(light);
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
 scene.add(ambientLight);
 
 
 // =======================
-// 手の接続構造（関節の接続関係）
+// 手の接続関係
 // =======================
 
 const HAND_CONNECTIONS = [
@@ -88,89 +110,67 @@ const HAND_CONNECTIONS = [
   [13, 14], [14, 15], [15, 16],
   // 小指
   [0, 17], [17, 18], [18, 19], [19, 20],
-  // 手のひら（付け根の接続）
+  // 手のひら
   [5, 9], [9, 13], [13, 17]
 ];
 
 
 // =======================
-// 両手用の3Dオブジェクト生成
+// 太い線（円柱）の生成
 // =======================
 
 const MAX_HANDS = 2;
 const handsData = [];
 
+// 再利用する円柱ジオメトリ（高さ1の単位円柱）
+const cylinderGeometry = new THREE.CylinderGeometry(1, 1, 1, 12);
+// 原点を底面に合わせることで伸縮時の位置計算を容易化
+cylinderGeometry.translate(0, 0.5, 0);
+cylinderGeometry.rotateX(Math.PI / 2);
+
 for (let h = 0; h < MAX_HANDS; h++) {
 
-  // 関節の点
-  const points = [];
-  for (let i = 0; i < 21; i++) {
-    const geo = new THREE.SphereGeometry(0.025);
-    const mat = new THREE.MeshStandardMaterial({
-      color: h === 0 ? 0x00ffff : 0xff00ff // 1つ目の手はシアン、2つ目はマゼンタ
-    });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.visible = false;
-    scene.add(mesh);
-    points.push(mesh);
-  }
-
-  // 骨格の線
-  const lines = [];
-  const lineMaterial = new THREE.LineBasicMaterial({
-    color: h === 0 ? 0x00ffff : 0xff00ff,
-    linewidth: 2
+  const material = new THREE.MeshStandardMaterial({
+    color: h === 0 ? config.colorHand1 : config.colorHand2,
+    roughness: 0.3,
+    metalness: 0.2
   });
 
+  const bones = [];
+
   for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
-    const geometry = new THREE.BufferGeometry();
-    // 2点（開始点・終了点）の3D座標データ用に6要素の配列を確保
-    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    const line = new THREE.Line(geometry, lineMaterial);
-    line.visible = false;
-    scene.add(line);
-    lines.push(line);
+    const mesh = new THREE.Mesh(cylinderGeometry, material);
+    mesh.visible = false;
+    scene.add(mesh);
+    bones.push(mesh);
   }
 
-  handsData.push({ points, lines });
+  handsData.push({ bones, material });
 }
 
 
 // =======================
-// Webcam
+// Webcam & MediaPipe
 // =======================
 
 const video = document.getElementById("webcam");
-
-const stream = await navigator.mediaDevices.getUserMedia({
-  video: true
-});
-
+const stream = await navigator.mediaDevices.getUserMedia({ video: true });
 video.srcObject = stream;
-
-
-// =======================
-// MediaPipe
-// =======================
 
 const vision = await FilesetResolver.forVisionTasks(
   "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
 );
 
-const handLandmarker =
-  await HandLandmarker.createFromOptions(
-    vision,
-    {
-      baseOptions: {
-        modelAssetPath:
-          "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-      },
-
-      runningMode: "VIDEO",
-
-      numHands: 2 // 両手検知に変更
-    }
-  );
+const handLandmarker = await HandLandmarker.createFromOptions(
+  vision,
+  {
+    baseOptions: {
+      modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+    },
+    runningMode: "VIDEO",
+    numHands: 2
+  }
+);
 
 
 // =======================
@@ -187,19 +187,16 @@ async function render() {
 
       lastVideoTime = video.currentTime;
 
-      const results =
-        handLandmarker.detectForVideo(
-          video,
-          performance.now()
-        );
+      const results = handLandmarker.detectForVideo(
+        video,
+        performance.now()
+      );
 
-      // 一旦すべての手と線を非表示にセット
+      // 非表示初期化
       for (let h = 0; h < MAX_HANDS; h++) {
-        handsData[h].points.forEach(p => p.visible = false);
-        handsData[h].lines.forEach(l => l.visible = false);
+        handsData[h].bones.forEach(b => b.visible = false);
       }
 
-      // 検知された手ごとに位置を更新
       if (results.landmarks) {
 
         for (let h = 0; h < results.landmarks.length && h < MAX_HANDS; h++) {
@@ -207,40 +204,41 @@ async function render() {
           const landmarks = results.landmarks[h];
           const hand = handsData[h];
 
-          // 1. 関節の座標設定
-          const currentPositions = [];
+          // 3D座標の抽出
+          const positions = landmarks.map(p => new THREE.Vector3(
+            -(p.x - 0.5) * 2.5,
+            -(p.y - 0.5) * 2,
+            -p.z * 2
+          ));
 
-          for (let i = 0; i < landmarks.length; i++) {
-
-            const p = landmarks[i];
-
-            // 鏡像に合わせてX軸を反転 (- (p.x - 0.5))
-            const x = -(p.x - 0.5) * 2.5;
-            const y = -(p.y - 0.5) * 2;
-            const z = -p.z * 2;
-
-            const pos = new THREE.Vector3(x, y, z);
-            currentPositions.push(pos);
-
-            hand.points[i].position.copy(pos);
-            hand.points[i].visible = true;
-          }
-
-          // 2. 骨格ラインの更新
+          // 各接続（骨格）を更新
           for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
 
             const [startIndex, endIndex] = HAND_CONNECTIONS[i];
-            const startPos = currentPositions[startIndex];
-            const endPos = currentPositions[endIndex];
+            const startPos = positions[startIndex];
+            const endPos = positions[endIndex];
 
-            const line = hand.lines[i];
-            const positionAttribute = line.geometry.getAttribute('position');
+            const bone = hand.bones[i];
 
-            positionAttribute.setXYZ(0, startPos.x, startPos.y, startPos.z);
-            positionAttribute.setXYZ(1, endPos.x, endPos.y, endPos.z);
-            positionAttribute.needsUpdate = true;
+            // 距離（長さ）の計算
+            const distance = startPos.distanceTo(endPos);
 
-            line.visible = true;
+            if (distance > 0) {
+              // 1. 位置の設定
+              bone.position.copy(startPos);
+
+              // 2. 向きの設定（始点から終点へ向かせる）
+              bone.lookAt(endPos);
+
+              // 3. スケールの設定（太さと長さを適用）
+              bone.scale.set(
+                config.thickness,
+                config.thickness,
+                distance
+              );
+
+              bone.visible = true;
+            }
           }
         }
       }
@@ -248,7 +246,6 @@ async function render() {
   }
 
   renderer.render(scene, camera);
-
   requestAnimationFrame(render);
 }
 
