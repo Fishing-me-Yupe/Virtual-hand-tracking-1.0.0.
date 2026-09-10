@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>Virtual Hand</title>
+  <title>Virtual Hand - Two Hands</title>
 
   <style>
     body {
@@ -19,6 +19,7 @@
       height: 240px;
       opacity: 0.3;
       z-index: 1;
+      transform: scaleX(-1); /* カメラ映像を鏡像表示に修正 */
     }
 
     canvas {
@@ -68,26 +69,70 @@ const light = new THREE.DirectionalLight(0xffffff, 3);
 light.position.set(0, 1, 2);
 scene.add(light);
 
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambientLight);
+
 
 // =======================
-// 手の点を作る
+// 手の接続構造（関節の接続関係）
 // =======================
 
-const handPoints = [];
+const HAND_CONNECTIONS = [
+  // 親指
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  // 人差し指
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  // 中指
+  [9, 10], [10, 11], [11, 12],
+  // 薬指
+  [13, 14], [14, 15], [15, 16],
+  // 小指
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  // 手のひら（付け根の接続）
+  [5, 9], [9, 13], [13, 17]
+];
 
-for (let i = 0; i < 21; i++) {
 
-  const geo = new THREE.SphereGeometry(0.03);
+// =======================
+// 両手用の3Dオブジェクト生成
+// =======================
 
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x00ffff
+const MAX_HANDS = 2;
+const handsData = [];
+
+for (let h = 0; h < MAX_HANDS; h++) {
+
+  // 関節の点
+  const points = [];
+  for (let i = 0; i < 21; i++) {
+    const geo = new THREE.SphereGeometry(0.025);
+    const mat = new THREE.MeshStandardMaterial({
+      color: h === 0 ? 0x00ffff : 0xff00ff // 1つ目の手はシアン、2つ目はマゼンタ
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    points.push(mesh);
+  }
+
+  // 骨格の線
+  const lines = [];
+  const lineMaterial = new THREE.LineBasicMaterial({
+    color: h === 0 ? 0x00ffff : 0xff00ff,
+    linewidth: 2
   });
 
-  const mesh = new THREE.Mesh(geo, mat);
+  for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
+    const geometry = new THREE.BufferGeometry();
+    // 2点（開始点・終了点）の3D座標データ用に6要素の配列を確保
+    geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    const line = new THREE.Line(geometry, lineMaterial);
+    line.visible = false;
+    scene.add(line);
+    lines.push(line);
+  }
 
-  scene.add(mesh);
-
-  handPoints.push(mesh);
+  handsData.push({ points, lines });
 }
 
 
@@ -123,7 +168,7 @@ const handLandmarker =
 
       runningMode: "VIDEO",
 
-      numHands: 1
+      numHands: 2 // 両手検知に変更
     }
   );
 
@@ -148,25 +193,55 @@ async function render() {
           performance.now()
         );
 
-      // 手が見つかった
-      if (results.landmarks.length > 0) {
+      // 一旦すべての手と線を非表示にセット
+      for (let h = 0; h < MAX_HANDS; h++) {
+        handsData[h].points.forEach(p => p.visible = false);
+        handsData[h].lines.forEach(l => l.visible = false);
+      }
 
-        const landmarks = results.landmarks[0];
+      // 検知された手ごとに位置を更新
+      if (results.landmarks) {
 
-        for (let i = 0; i < landmarks.length; i++) {
+        for (let h = 0; h < results.landmarks.length && h < MAX_HANDS; h++) {
 
-          const p = landmarks[i];
+          const landmarks = results.landmarks[h];
+          const hand = handsData[h];
 
-          // 座標変換
-          const x = (p.x - 0.5) * 2;
-          const y = -(p.y - 0.5) * 2;
-          const z = -p.z;
+          // 1. 関節の座標設定
+          const currentPositions = [];
 
-          handPoints[i].position.set(
-            x,
-            y,
-            z
-          );
+          for (let i = 0; i < landmarks.length; i++) {
+
+            const p = landmarks[i];
+
+            // 鏡像に合わせてX軸を反転 (- (p.x - 0.5))
+            const x = -(p.x - 0.5) * 2.5;
+            const y = -(p.y - 0.5) * 2;
+            const z = -p.z * 2;
+
+            const pos = new THREE.Vector3(x, y, z);
+            currentPositions.push(pos);
+
+            hand.points[i].position.copy(pos);
+            hand.points[i].visible = true;
+          }
+
+          // 2. 骨格ラインの更新
+          for (let i = 0; i < HAND_CONNECTIONS.length; i++) {
+
+            const [startIndex, endIndex] = HAND_CONNECTIONS[i];
+            const startPos = currentPositions[startIndex];
+            const endPos = currentPositions[endIndex];
+
+            const line = hand.lines[i];
+            const positionAttribute = line.geometry.getAttribute('position');
+
+            positionAttribute.setXYZ(0, startPos.x, startPos.y, startPos.z);
+            positionAttribute.setXYZ(1, endPos.x, endPos.y, endPos.z);
+            positionAttribute.needsUpdate = true;
+
+            line.visible = true;
+          }
         }
       }
     }
