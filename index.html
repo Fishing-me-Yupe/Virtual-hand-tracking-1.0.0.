@@ -61,24 +61,49 @@ function status(t,err=false){statusEl.textContent=t;statusEl.classList.toggle('e
 function resize(){const w=canvas.clientWidth,h=canvas.clientHeight;if(!w||!h)return;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
 window.addEventListener('resize',resize);new ResizeObserver(resize).observe(canvas);
 function resetPose(){for(const [name,q] of Object.entries(restQuats)){if(bones[name])bones[name].quaternion.copy(q)}for(const f of Object.keys(fingers)){const el=document.getElementById(f);el.value=0;document.getElementById(f+'Out').textContent='0°'}handRoot?.updateMatrixWorld(true)}
-function manualPose(){if(!handRoot||tracking)return;for(const [finger,indices] of Object.entries(fingers)){const deg=Number(document.getElementById(finger).value);document.getElementById(finger+'Out').textContent=deg+'°';indices.forEach((idx,j)=>{const b=Object.values(bones).find(o=>o.name.endsWith(({thumb:['thumb_CMC/MCP','thumb_PIP','thumb_DIP'],index:['index_CMC/MCP','index_PIP','index_DIP'],middle:['middle_CMC/MCP','middle_PIP','middle_DIP'],ring:['ring_CMC/MCP','ring_PIP','ring_DIP'],pinky:['pinky_CMC/MCP','pinky_PIP','pinky_DIP']}[finger][j])));if(b){b.quaternion.copy(restQuats[b.name]);b.rotateX(THREE.MathUtils.degToRad(deg*(j===0?.42:j===1?.72:1)));}})}handRoot.updateMatrixWorld(true)}
+const boneSuffixes={thumb:['thumb_CMC/MCP','thumb_PIP','thumb_DIP'],index:['index_CMC/MCP','index_PIP','index_DIP'],middle:['middle_CMC/MCP','middle_PIP','middle_DIP'],ring:['ring_CMC/MCP','ring_PIP','ring_DIP'],pinky:['pinky_CMC/MCP','pinky_PIP','pinky_DIP']};
+function getFingerBone(finger,j){return bones[Object.keys(bones).find(n=>n.endsWith(boneSuffixes[finger][j]))]||null;}
+function manualPose(){if(!handRoot||tracking)return;for(const [finger] of Object.entries(fingers)){const deg=Number(document.getElementById(finger).value);document.getElementById(finger+'Out').textContent=deg+'°';for(let j=0;j<3;j++){const b=getFingerBone(finger,j);if(!b)continue;b.quaternion.copy(restQuats[b.name]);/* each joint has its own bend amount */const factor=j===0?0.38:j===1?0.72:1.0;b.rotateX(THREE.MathUtils.degToRad(deg*factor));handRoot.updateMatrixWorld(true);}}}
 for(const f of Object.keys(fingers))document.getElementById(f).addEventListener('input',manualPose);
-function worldDir(lm,a,b){let dx=lm[b].x-lm[a].x,dy=lm[b].y-lm[a].y,dz=(lm[b].z??0)-(lm[a].z??0); // MediaPipe image axes -> hand-model axes; invert X for the mirrored left-hand mesh
- return new THREE.Vector3(-dx,-dy,-dz).normalize();}
-function driveBones(lm){if(!handRoot)return; // each joint aims its next segment toward the corresponding MediaPipe segment
- for(const [finger, jointIds] of Object.entries(fingers)){
+function landmarkVector(lm,a,b){return new THREE.Vector3(lm[b].x-lm[a].x,lm[b].y-lm[a].y,(lm[b].z??0)-(lm[a].z??0));}
+function driveBones(lm){
+ if(!handRoot)return;
+ // Start each frame from the neutral rig to prevent accumulated rotational drift.
+ for(const [name,q] of Object.entries(restQuats)){if(bones[name])bones[name].quaternion.copy(q);}
+ handRoot.updateMatrixWorld(true);
+ // Establish a hand-relative coordinate frame from the palm. This removes the old
+ // error where camera-space vectors were applied directly to model-space bones.
+ const across=landmarkVector(lm,5,17); across.z=0; if(across.lengthSq()<1e-8)return; across.normalize();
+ const along=landmarkVector(lm,0,9); along.z=0; if(along.lengthSq()<1e-8)return; along.normalize();
+ const localToWorldDir=(v)=>{const o=v.clone().transformDirection(handRoot.matrixWorld);return o.normalize();};
+ for(const [finger] of Object.entries(fingers)){
   const pairs=ids[finger];
-  for(let j=0;j<jointIds.length;j++){
-   const nodeIndex=jointIds[j];const name=Object.keys(bones).find(n=>{const suffix=({thumb:['thumb_CMC/MCP','thumb_PIP','thumb_DIP'],index:['index_CMC/MCP','index_PIP','index_DIP'],middle:['middle_CMC/MCP','middle_PIP','middle_DIP'],ring:['ring_CMC/MCP','ring_PIP','ring_DIP'],pinky:['pinky_CMC/MCP','pinky_PIP','pinky_DIP']}[finger][j]);return n.endsWith(suffix)});const bone=bones[name];if(!bone)continue;
-   const dir=worldDir(lm,pairs[j][0],pairs[j][1]);
-   // Aim the model's local segment vector at the camera-derived landmark vector.
-   const child=bone.children.find(c=>c.isBone);if(!child)continue;
-   const rest=child.position.clone().normalize();const desired=new THREE.Quaternion().setFromUnitVectors(rest,dir);
-   const parent=bone.parent;parent.updateWorldMatrix(true,false);const parentWorld=parent.getWorldQuaternion(new THREE.Quaternion());
-   bone.quaternion.copy(parentWorld.invert().multiply(desired));
+  for(let j=0;j<3;j++){
+   const bone=getFingerBone(finger,j); if(!bone)continue;
+   const child=bone.children.find(c=>c.isBone); if(!child)continue;
+   const lmDir=landmarkVector(lm,pairs[j][0],pairs[j][1]);
+   // Map image-plane motion into the mirrored model's local hand frame.
+   const hx=lmDir.x*across.x+lmDir.y*across.y;
+   const hy=lmDir.x*along.x+lmDir.y*along.y;
+   const targetLocal=new THREE.Vector3(-hx,hy,-lmDir.z*0.7);
+   if(targetLocal.lengthSq()<1e-8)continue;
+   const targetWorld=localToWorldDir(targetLocal);
+   handRoot.updateMatrixWorld(true); bone.updateWorldMatrix(true,false); child.updateWorldMatrix(true,false);
+   const bonePos=bone.getWorldPosition(new THREE.Vector3());
+   const childPos=child.getWorldPosition(new THREE.Vector3());
+   const currentWorld=childPos.sub(bonePos).normalize();
+   if(currentWorld.lengthSq()<1e-8)continue;
+   // Rotate the existing world-space segment toward the matching MediaPipe segment,
+   // then convert the result back into the bone parent's local coordinate frame.
+   const delta=new THREE.Quaternion().setFromUnitVectors(currentWorld,targetWorld);
+   const currentWorldQ=bone.getWorldQuaternion(new THREE.Quaternion());
+   const desiredWorldQ=delta.multiply(currentWorldQ);
+   const parent=bone.parent;
+   if(parent){parent.updateWorldMatrix(true,false);const parentWorldQ=parent.getWorldQuaternion(new THREE.Quaternion());bone.quaternion.copy(parentWorldQ.invert().multiply(desiredWorldQ));}
+   else bone.quaternion.copy(desiredWorldQ);
+   handRoot.updateMatrixWorld(true);
   }
  }
- handRoot.updateMatrixWorld(true);
 }
 async function startTracking(){if(tracking)return;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('このブラウザーではカメラが利用できません。HTTPSで開いてください。');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});video.srcObject=stream;await video.play();video.classList.add('visible');
  if(typeof Hands==='undefined')throw new Error('MediaPipeを読み込めませんでした。ネットワーク接続を確認してください。');
