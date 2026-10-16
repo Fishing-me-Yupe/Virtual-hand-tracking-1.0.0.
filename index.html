@@ -30,11 +30,11 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14p
   <div class="control"><label for="middle">中指の曲げ <output id="middleOut">0°</output></label><input id="middle" type="range" min="0" max="100" value="0"></div>
   <div class="control"><label for="ring">薬指の曲げ <output id="ringOut">0°</output></label><input id="ring" type="range" min="0" max="100" value="0"></div>
   <div class="control"><label for="pinky">小指の曲げ <output id="pinkyOut">0°</output></label><input id="pinky" type="range" min="0" max="100" value="0"></div>
-  <p class="hint">スライダーは指の関節をまとめて曲げる簡易操作です。Orbit操作：ドラッグで回転、ホイール／ピンチでズーム。</p>
+  <p class="hint">指の各関節を曲げ、手のひらも少し連動させる試作操作です。Orbit操作：ドラッグで回転、ホイール／ピンチでズーム。</p>
  </section>
 </aside>
 </main>
-<div class="footer">※ MediaPipeのランドマークから各指ボーンの向きを推定する試作版です。手の向きやカメラ角度によっては関節の曲がる方向に調整が必要な場合があります。</div>
+<div class="footer">※ MediaPipeのランドマークから各指ボーンの向きと手のひらの補助的なカールを推定する試作版です。手の向きやカメラ角度によっては関節の曲がる方向に調整が必要な場合があります。</div>
 <script type="module">
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
@@ -63,13 +63,24 @@ window.addEventListener('resize',resize);new ResizeObserver(resize).observe(canv
 function resetPose(){for(const [name,q] of Object.entries(restQuats)){if(bones[name])bones[name].quaternion.copy(q)}for(const f of Object.keys(fingers)){const el=document.getElementById(f);el.value=0;document.getElementById(f+'Out').textContent='0°'}handRoot?.updateMatrixWorld(true)}
 const boneSuffixes={thumb:['thumb_CMC/MCP','thumb_PIP','thumb_DIP'],index:['index_CMC/MCP','index_PIP','index_DIP'],middle:['middle_CMC/MCP','middle_PIP','middle_DIP'],ring:['ring_CMC/MCP','ring_PIP','ring_DIP'],pinky:['pinky_CMC/MCP','pinky_PIP','pinky_DIP']};
 function getFingerBone(finger,j){return bones[Object.keys(bones).find(n=>n.endsWith(boneSuffixes[finger][j]))]||null;}
-function manualPose(){if(!handRoot||tracking)return;for(const [finger] of Object.entries(fingers)){const deg=Number(document.getElementById(finger).value);document.getElementById(finger+'Out').textContent=deg+'°';for(let j=0;j<3;j++){const b=getFingerBone(finger,j);if(!b)continue;b.quaternion.copy(restQuats[b.name]);/* each joint has its own bend amount */const factor=j===0?0.38:j===1?0.72:1.0;b.rotateX(THREE.MathUtils.degToRad(deg*factor));handRoot.updateMatrixWorld(true);}}}
+function manualPose(){if(!handRoot||tracking)return;
+ // Couple the palm to the average finger curl. The palm joint is part of the
+ // existing rig and its rotation is reset every frame before applying this pose.
+ const palm=bones['Hand_L_Palm']; if(palm&&restQuats[palm.name])palm.quaternion.copy(restQuats[palm.name]);
+ const curlValues=Object.keys(fingers).map(f=>Number(document.getElementById(f).value));
+ const palmCurl=curlValues.reduce((a,b)=>a+b,0)/curlValues.length;
+ if(palm&&restQuats[palm.name])palm.rotateX(THREE.MathUtils.degToRad(palmCurl*0.10));
+ for(const [finger] of Object.entries(fingers)){const deg=Number(document.getElementById(finger).value);document.getElementById(finger+'Out').textContent=deg+'°';for(let j=0;j<3;j++){const b=getFingerBone(finger,j);if(!b)continue;b.quaternion.copy(restQuats[b.name]);/* each joint has its own bend amount */const factor=j===0?0.38:j===1?0.72:1.0;b.rotateX(THREE.MathUtils.degToRad(deg*factor));handRoot.updateMatrixWorld(true);}}}
 for(const f of Object.keys(fingers))document.getElementById(f).addEventListener('input',manualPose);
 function landmarkVector(lm,a,b){return new THREE.Vector3(lm[b].x-lm[a].x,lm[b].y-lm[a].y,(lm[b].z??0)-(lm[a].z??0));}
 function driveBones(lm){
  if(!handRoot)return;
  // Start each frame from the neutral rig to prevent accumulated rotational drift.
  for(const [name,q] of Object.entries(restQuats)){if(bones[name])bones[name].quaternion.copy(q);}
+ // Estimate palm cupping from the average finger curl (tip-to-base shortening).
+ // This is intentionally subtle to avoid rotating the whole hand unnaturally.
+ const palm=bones['Hand_L_Palm'];
+ if(palm&&restQuats[palm.name]){let sum=0,n=0;for(const f of ['index','middle','ring','pinky']){const base=lm[({index:5,middle:9,ring:13,pinky:17})[f]],tip=lm[({index:8,middle:12,ring:16,pinky:20})[f]],wrist=lm[0];const d0=Math.hypot(base.x-wrist.x,base.y-wrist.y),d1=Math.hypot(tip.x-base.x,tip.y-base.y);if(d0>1e-5){sum+=Math.max(0,Math.min(1,1-d1/(d0*1.8)));n++;}}const curl=n?sum/n:0;palm.rotateX(THREE.MathUtils.degToRad(curl*8));}
  handRoot.updateMatrixWorld(true);
  // Establish a hand-relative coordinate frame from the palm. This removes the old
  // error where camera-space vectors were applied directly to model-space bones.
