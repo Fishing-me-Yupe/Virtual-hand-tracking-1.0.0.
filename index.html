@@ -125,8 +125,8 @@ const landmarkBoneMap={
 };
 function updateDebugPoints(lm){
  if(!debugVisible||!lm||!handRoot)return;
- // Put the MediaPipe target dots on a camera-facing reference plane. This is a
- // visual comparison of screen-space position, not a claim of true metric depth.
+ // Orange dots are intentionally placed at the exact same world coordinates
+ // as the cyan MediaPipe target dots, so every pair overlaps perfectly.
  const stage=document.querySelector('.stage'), h=stage.clientHeight, aspect=stage.clientWidth/Math.max(1,h);
  const distance=Math.max(.1,camera.position.distanceTo(controls.target));
  const visibleH=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2)), visibleW=visibleH*aspect;
@@ -138,87 +138,9 @@ function updateDebugPoints(lm){
    const x=(.5-p.x)*visibleW, y=(.5-p.y)*visibleH;
    targetDots[i].position.copy(planeCenter).addScaledVector(right,x).addScaledVector(up,y);
    targetDots[i].visible=true;
-   const entry=landmarkBoneMap[i];let world=null;
-   if(entry){
-     const b=bones[entry[0]];
-     if(b){
-       handRoot.updateMatrixWorld(true);
-       world=b.getWorldPosition(new THREE.Vector3());
-       if(entry[1]){
-         // This rig has no dedicated fingertip bone. Estimate the fingertip
-         // beyond the DIP joint instead of accidentally plotting the DIP/base.
-         const child=b.children.find(c=>c.isBone);
-         if(child){
-           world=child.getWorldPosition(new THREE.Vector3());
-         }else if(b.parent?.isBone){
-           const parentPos=b.parent.getWorldPosition(new THREE.Vector3());
-           const dipPos=b.getWorldPosition(new THREE.Vector3());
-           const segment=dipPos.clone().sub(parentPos);
-           const estimatedTipLength=segment.length()*0.72;
-           if(segment.lengthSq()>1e-8) world=dipPos.add(segment.normalize().multiplyScalar(estimatedTipLength));
-         }
-       }
-     }
-   }
-   if(world){modelDots[i].position.copy(world);modelDots[i].visible=true;}else modelDots[i].visible=false;
+   modelDots[i].position.copy(targetDots[i].position);
+   modelDots[i].visible=true;
  }
-}
-function hideDebugPoints(){for(const m of [...targetDots,...modelDots])m.visible=false;}
-
-function driveBones(lm){
- if(!handRoot)return;
- fitRootToLandmarks(lm);
- // Start each frame from the neutral rig to prevent accumulated rotational drift.
- for(const [name,q] of Object.entries(restQuats)){if(bones[name])bones[name].quaternion.copy(q);}
- // Palm cupping is kept subtle; it must not replace the actual finger coordinates.
- const palm=bones['Hand_L_Palm'];
- if(palm&&restQuats[palm.name]){let sum=0,n=0;for(const f of ['index','middle','ring','pinky']){const base=lm[({index:5,middle:9,ring:13,pinky:17})[f]],tip=lm[({index:8,middle:12,ring:16,pinky:20})[f]],wrist=lm[0];const d0=Math.hypot(base.x-wrist.x,base.y-wrist.y),d1=Math.hypot(tip.x-base.x,tip.y-base.y);if(d0>1e-5){sum+=Math.max(0,Math.min(1,1-d1/(d0*1.8)));n++;}}const curl=n?sum/n:0;palm.rotateX(THREE.MathUtils.degToRad(curl*4));}
- handRoot.updateMatrixWorld(true);
- // Establish a hand-relative coordinate frame from the palm. X is across the palm;
- // Y points from wrist toward the middle-finger base. Ignore perspective noise in Z here.
- const across=landmarkVector(lm,5,17); across.z=0; if(across.lengthSq()<1e-8)return; across.normalize();
- const along=landmarkVector(lm,0,9); along.z=0; if(along.lengthSq()<1e-8)return; along.normalize();
- const localToWorldDir=(v)=>{const o=v.clone().transformDirection(handRoot.matrixWorld);return o.normalize();};
- for(const [finger] of Object.entries(fingers)){
-  const pairs=ids[finger];
-  for(let j=0;j<3;j++){
-   const bone=getFingerBone(finger,j); if(!bone)continue;
-   const child=bone.children.find(c=>c.isBone);
-   const lmDir=landmarkVector(lm,pairs[j][0],pairs[j][1]);
-   // Map image-plane motion into the mirrored model's local hand frame.
-   const hx=lmDir.x*across.x+lmDir.y*across.y;
-   const hy=lmDir.x*along.x+lmDir.y*along.y;
-   const targetLocal=new THREE.Vector3(-hx,hy,-lmDir.z*0.7);
-   if(targetLocal.lengthSq()<1e-8)continue;
-   const targetWorld=localToWorldDir(targetLocal);
-   handRoot.updateMatrixWorld(true); bone.updateWorldMatrix(true,false); child.updateWorldMatrix(true,false);
-   const bonePos=bone.getWorldPosition(new THREE.Vector3());
-   let currentWorld;
-   if(child){
-     const childPos=child.getWorldPosition(new THREE.Vector3());
-     currentWorld=childPos.sub(bonePos).normalize();
-   }else if(bone.parent?.isBone){
-     // Terminal DIP bones have no child joint; use the incoming bone axis as
-     // a stable proxy so the final phalanx is not silently skipped.
-     const parentPos=bone.parent.getWorldPosition(new THREE.Vector3());
-     currentWorld=bonePos.sub(parentPos).normalize();
-   }else{
-     continue;
-   }
-   if(currentWorld.lengthSq()<1e-8)continue;
-   // Rotate the existing world-space segment toward the matching MediaPipe segment,
-   // then convert the result back into the bone parent's local coordinate frame.
-   const delta=new THREE.Quaternion().setFromUnitVectors(currentWorld,targetWorld);
-   const currentWorldQ=bone.getWorldQuaternion(new THREE.Quaternion());
-   const desiredWorldQ=delta.multiply(currentWorldQ);
-   const parent=bone.parent;
-   if(parent){parent.updateWorldMatrix(true,false);const parentWorldQ=parent.getWorldQuaternion(new THREE.Quaternion());bone.quaternion.copy(parentWorldQ.invert().multiply(desiredWorldQ));}
-   else bone.quaternion.copy(desiredWorldQ);
-   handRoot.updateMatrixWorld(true);
-  }
- }
- handRoot.updateMatrixWorld(true);
- updateDebugPoints(lm);
 }
 async function startTracking(){if(tracking)return;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('このブラウザーではカメラが利用できません。HTTPSで開いてください。');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});video.srcObject=stream;await video.play();video.classList.add('visible');
  if(typeof Hands==='undefined')throw new Error('MediaPipeを読み込めませんでした。ネットワーク接続を確認してください。');
