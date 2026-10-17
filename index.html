@@ -34,7 +34,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14p
  </section>
 </aside>
 </main>
-<div class="footer">※ MediaPipeのランドマークから各指ボーンの向きと手のひらの補助的なカールを推定する試作版です。手の向きやカメラ角度によっては関節の曲がる方向に調整が必要な場合があります。</div>
+<div class="footer">※ MediaPipeのランドマークに合わせて手全体の位置・向き・大きさと各指ボーンを更新する試作版です。単眼カメラのため奥行きは近似です。</div>
 <script type="module">
 import * as THREE from 'three';
 import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
@@ -47,6 +47,7 @@ const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamp
 scene.add(new THREE.HemisphereLight(0xe4efff,0x343b4c,2.1));const key=new THREE.DirectionalLight(0xffffff,2.5);key.position.set(-.4,.6,1);scene.add(key);const fill=new THREE.DirectionalLight(0x91cfff,1.0);fill.position.set(.6,.1,-.5);scene.add(fill);
 const grid=new THREE.GridHelper(1,20,0x344153,0x202b39);grid.position.y=-.12;scene.add(grid);
 let handRoot=null, bones={}, restQuats={}, restVectors={}, tracking=false, stream=null, mpHands=null, manualMode=true;
+const MODEL_BASE_SCALE=1; // GLB本体の形状は変更せず、追跡時はルート変換だけを調整
 const fingers={thumb:[3,4,5],index:[7,8,9],middle:[11,12,13],ring:[15,16,17],pinky:[19,20,21]};
 const ids={thumb:[[1,2],[2,3],[3,4]],index:[[5,6],[6,7],[7,8]],middle:[[9,10],[10,11],[11,12]],ring:[[13,14],[14,15],[15,16]],pinky:[[17,18],[18,19],[19,20]]};
 const nodeNames=['Hand_L_Wrist','Hand_L_Palm','Hand_L_thumb_CMC/MCP','Hand_L_thumb_PIP','Hand_L_thumb_DIP','Hand_L_index_CMC/MCP','Hand_L_index_PIP','Hand_L_index_DIP','Hand_L_middle_CMC/MCP','Hand_L_middle_PIP','Hand_L_middle_DIP','Hand_L_ring_CMC/MCP','Hand_L_ring_PIP','Hand_L_ring_DIP','Hand_L_pinky_CMC/MCP','Hand_L_pinky_PIP','Hand_L_pinky_DIP'];
@@ -73,17 +74,47 @@ function manualPose(){if(!handRoot||tracking)return;
  for(const [finger] of Object.entries(fingers)){const deg=Number(document.getElementById(finger).value);document.getElementById(finger+'Out').textContent=deg+'°';for(let j=0;j<3;j++){const b=getFingerBone(finger,j);if(!b)continue;b.quaternion.copy(restQuats[b.name]);/* each joint has its own bend amount */const factor=j===0?0.38:j===1?0.72:1.0;b.rotateX(THREE.MathUtils.degToRad(deg*factor));handRoot.updateMatrixWorld(true);}}}
 for(const f of Object.keys(fingers))document.getElementById(f).addEventListener('input',manualPose);
 function landmarkVector(lm,a,b){return new THREE.Vector3(lm[b].x-lm[a].x,lm[b].y-lm[a].y,(lm[b].z??0)-(lm[a].z??0));}
+function fitRootToLandmarks(lm){
+ // ルートの位置・向き・大きさも追従させる。指だけ回していた旧処理では、
+ // 手首が画面上の同じ場所に固定されるため、指先座標が一致しなかった。
+ const stage=document.querySelector('.stage');
+ const h=stage.clientHeight;
+ const aspect=stage.clientWidth/Math.max(1,h);
+ const distance=Math.max(0.1,camera.position.distanceTo(controls.target));
+ const visibleH=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+ const visibleW=visibleH*aspect;
+ const wrist=lm[0], middleBase=lm[9], indexBase=lm[5], pinkyBase=lm[17];
+ const palmWidth=Math.hypot(indexBase.x-pinkyBase.x,indexBase.y-pinkyBase.y);
+ // GLBの手幅はローカル座標で約0.16。ランドマーク間の画面幅に合わせる。
+ const modelWidth=0.167;
+ const fitScale=THREE.MathUtils.clamp((palmWidth*visibleW)/modelWidth,0.28,1.8)*MODEL_BASE_SCALE;
+ handRoot.scale.set(-fitScale,fitScale,fitScale);
+ // 手首から中指付け根への方向を画面座標から求め、手全体を回転する。
+ const dx=-(middleBase.x-wrist.x), dy=-(middleBase.y-wrist.y);
+ handRoot.rotation.set(0,0,Math.atan2(-dx,dy));
+ handRoot.position.set(0,0,0);
+ handRoot.updateMatrixWorld(true);
+ const wristBone=bones['Hand_L_Wrist'];
+ const currentWrist=wristBone?wristBone.getWorldPosition(new THREE.Vector3()):new THREE.Vector3();
+ const targetWrist=new THREE.Vector3(
+   (0.5-wrist.x)*visibleW,
+   0.075+(0.5-wrist.y)*visibleH,
+   0
+ );
+ handRoot.position.add(targetWrist.sub(currentWrist));
+ handRoot.updateMatrixWorld(true);
+}
 function driveBones(lm){
  if(!handRoot)return;
+ fitRootToLandmarks(lm);
  // Start each frame from the neutral rig to prevent accumulated rotational drift.
  for(const [name,q] of Object.entries(restQuats)){if(bones[name])bones[name].quaternion.copy(q);}
- // Estimate palm cupping from the average finger curl (tip-to-base shortening).
- // This is intentionally subtle to avoid rotating the whole hand unnaturally.
+ // Palm cupping is kept subtle; it must not replace the actual finger coordinates.
  const palm=bones['Hand_L_Palm'];
- if(palm&&restQuats[palm.name]){let sum=0,n=0;for(const f of ['index','middle','ring','pinky']){const base=lm[({index:5,middle:9,ring:13,pinky:17})[f]],tip=lm[({index:8,middle:12,ring:16,pinky:20})[f]],wrist=lm[0];const d0=Math.hypot(base.x-wrist.x,base.y-wrist.y),d1=Math.hypot(tip.x-base.x,tip.y-base.y);if(d0>1e-5){sum+=Math.max(0,Math.min(1,1-d1/(d0*1.8)));n++;}}const curl=n?sum/n:0;palm.rotateX(THREE.MathUtils.degToRad(curl*8));}
+ if(palm&&restQuats[palm.name]){let sum=0,n=0;for(const f of ['index','middle','ring','pinky']){const base=lm[({index:5,middle:9,ring:13,pinky:17})[f]],tip=lm[({index:8,middle:12,ring:16,pinky:20})[f]],wrist=lm[0];const d0=Math.hypot(base.x-wrist.x,base.y-wrist.y),d1=Math.hypot(tip.x-base.x,tip.y-base.y);if(d0>1e-5){sum+=Math.max(0,Math.min(1,1-d1/(d0*1.8)));n++;}}const curl=n?sum/n:0;palm.rotateX(THREE.MathUtils.degToRad(curl*4));}
  handRoot.updateMatrixWorld(true);
- // Establish a hand-relative coordinate frame from the palm. This removes the old
- // error where camera-space vectors were applied directly to model-space bones.
+ // Establish a hand-relative coordinate frame from the palm. X is across the palm;
+ // Y points from wrist toward the middle-finger base. Ignore perspective noise in Z here.
  const across=landmarkVector(lm,5,17); across.z=0; if(across.lengthSq()<1e-8)return; across.normalize();
  const along=landmarkVector(lm,0,9); along.z=0; if(along.lengthSq()<1e-8)return; along.normalize();
  const localToWorldDir=(v)=>{const o=v.clone().transformDirection(handRoot.matrixWorld);return o.normalize();};
