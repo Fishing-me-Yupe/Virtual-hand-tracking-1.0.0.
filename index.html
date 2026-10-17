@@ -11,7 +11,7 @@ header{padding:18px 20px 12px;border-bottom:1px solid var(--line)}h1{font-size:2
 main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14px;max-width:1400px;margin:auto}
 .stage{position:relative;min-height:420px;height:min(72vh,760px);background:radial-gradient(ellipse at 50% 42%,#202c3d,#0b0f16 72%);border:1px solid var(--line);border-radius:14px;overflow:hidden}
 #view{display:block;width:100%;height:100%}.status{position:absolute;left:12px;top:12px;background:#080c13cc;border:1px solid #344055;border-radius:9px;padding:7px 10px;font-size:12px;color:var(--muted);max-width:calc(100% - 24px)}
-.side{display:flex;flex-direction:column;gap:12px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}.panel h2{font-size:14px;margin:0 0 10px}.row{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #3a4960;background:#202b3b;color:var(--text);padding:9px 11px;border-radius:8px;font:inherit;font-size:13px;cursor:pointer}.btn.primary{background:#17685e;border-color:#2c9c8c}.btn:disabled{opacity:.5;cursor:default}.hint{color:var(--muted);font-size:12px;margin:9px 0 0}.control{margin:13px 0}.control label{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:5px}.control output{color:var(--accent);font-variant-numeric:tabular-nums}input[type=range]{width:100%;accent-color:var(--accent)}video{position:absolute;right:12px;bottom:12px;width:min(32%,190px);aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1);border:1px solid #718097;border-radius:9px;background:#05070b;display:none}video.visible{display:block}.footer{padding:0 18px 18px;color:var(--muted);font-size:12px;max-width:1400px;margin:auto}.error{color:#ffb6b6}
+.side{display:flex;flex-direction:column;gap:12px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}.panel h2{font-size:14px;margin:0 0 10px}.row{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #3a4960;background:#202b3b;color:var(--text);padding:9px 11px;border-radius:8px;font:inherit;font-size:13px;cursor:pointer}.btn.primary{background:#17685e;border-color:#2c9c8c}.btn:disabled{opacity:.5;cursor:default}.hint{color:var(--muted);font-size:12px;margin:9px 0 0}.control{margin:13px 0}.control label{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:5px}.control output{color:var(--accent);font-variant-numeric:tabular-nums}input[type=range]{width:100%;accent-color:var(--accent)}video{position:absolute;right:12px;bottom:12px;width:min(32%,190px);aspect-ratio:4/3;object-fit:cover;transform:scaleX(-1);border:1px solid #718097;border-radius:9px;background:#05070b;display:none}video.visible{display:block}.footer{padding:0 18px 18px;color:var(--muted);font-size:12px;max-width:1400px;margin:auto}.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}.legend span{display:inline-flex;align-items:center;gap:6px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%}.toggle{display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px}.toggle input{accent-color:var(--accent)}.error{color:#ffb6b6}
 @media(max-width:850px){main{grid-template-columns:1fr}.stage{height:55vh;min-height:330px}.side{display:grid;grid-template-columns:1fr 1fr}.panel:last-child{grid-column:1/-1}}
 @media(max-width:520px){.side{display:flex}.stage{height:48vh;min-height:290px}header{padding:14px}}
 </style>
@@ -23,7 +23,7 @@ main{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:14px;padding:14p
 <main>
 <section class="stage"><canvas id="view"></canvas><div class="status" id="status">モデルを読み込み中…</div><video id="video" playsinline muted></video></section>
 <aside class="side">
- <section class="panel"><h2>操作</h2><div class="row"><button class="btn primary" id="start">カメラ追従を開始</button><button class="btn" id="stop" disabled>停止</button></div><div class="row" style="margin-top:8px"><button class="btn" id="open">手を開く</button><button class="btn" id="fist">握る</button><button class="btn" id="reset">リセット</button></div><p class="hint">カメラはHTTPS（GitHub Pages）またはlocalhostで使用してください。カメラ映像はこのページ内で処理します。</p></section>
+ <section class="panel"><h2>操作</h2><div class="row"><button class="btn primary" id="start">カメラ追従を開始</button><button class="btn" id="stop" disabled>停止</button></div><div class="row" style="margin-top:8px"><button class="btn" id="open">手を開く</button><button class="btn" id="fist">握る</button><button class="btn" id="reset">リセット</button></div><label class="toggle"><input id="showPoints" type="checkbox" checked> 関節ポイントを表示</label><div class="legend"><span><i class="dot" style="background:#29d8ff"></i>認識座標（目標）</span><span><i class="dot" style="background:#ff9e42"></i>3Dモデルの関節</span></div><p class="hint">青はMediaPipeの目標位置、オレンジは3Dモデル側の実際の関節位置です。両者のずれを比較できます。</p><p class="hint">カメラはHTTPS（GitHub Pages）またはlocalhostで使用してください。カメラ映像はこのページ内で処理します。</p></section>
  <section class="panel"><h2>手動ポーズ（カメラ停止中）</h2>
   <div class="control"><label for="thumb">親指の曲げ <output id="thumbOut">0°</output></label><input id="thumb" type="range" min="0" max="85" value="0"></div>
   <div class="control"><label for="index">人差し指の曲げ <output id="indexOut">0°</output></label><input id="index" type="range" min="0" max="100" value="0"></div>
@@ -47,6 +47,15 @@ const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamp
 scene.add(new THREE.HemisphereLight(0xe4efff,0x343b4c,2.1));const key=new THREE.DirectionalLight(0xffffff,2.5);key.position.set(-.4,.6,1);scene.add(key);const fill=new THREE.DirectionalLight(0x91cfff,1.0);fill.position.set(.6,.1,-.5);scene.add(fill);
 const grid=new THREE.GridHelper(1,20,0x344153,0x202b39);grid.position.y=-.12;scene.add(grid);
 let handRoot=null, bones={}, restQuats={}, restVectors={}, tracking=false, stream=null, mpHands=null, manualMode=true;
+// Debug visualization: cyan = MediaPipe target points; orange = actual rig joint positions.
+const debugGroup=new THREE.Group();scene.add(debugGroup);
+const targetDots=[], modelDots=[];
+const dotGeo=new THREE.SphereGeometry(0.0055,10,8);
+const targetMat=new THREE.MeshBasicMaterial({color:0x29d8ff,depthTest:false});
+const modelMat=new THREE.MeshBasicMaterial({color:0xff9e42,depthTest:false});
+for(let i=0;i<21;i++){const a=new THREE.Mesh(dotGeo,targetMat);a.renderOrder=20;debugGroup.add(a);targetDots.push(a);const b=new THREE.Mesh(new THREE.SphereGeometry(0.0065,10,8),modelMat);b.renderOrder=21;debugGroup.add(b);modelDots.push(b);}
+let debugVisible=true;
+document.querySelector('#showPoints').addEventListener('change',e=>{debugVisible=e.target.checked;debugGroup.visible=debugVisible;});
 const MODEL_BASE_SCALE=1; // GLB本体の形状は変更せず、追跡時はルート変換だけを調整
 const fingers={thumb:[3,4,5],index:[7,8,9],middle:[11,12,13],ring:[15,16,17],pinky:[19,20,21]};
 const ids={thumb:[[1,2],[2,3],[3,4]],index:[[5,6],[6,7],[7,8]],middle:[[9,10],[10,11],[11,12]],ring:[[13,14],[14,15],[15,16]],pinky:[[17,18],[18,19],[19,20]]};
@@ -104,6 +113,38 @@ function fitRootToLandmarks(lm){
  handRoot.position.add(targetWrist.sub(currentWrist));
  handRoot.updateMatrixWorld(true);
 }
+// Landmark indices -> rig bone names. The final landmark of each finger is
+// represented by the end of the last segment rather than a separate bone origin.
+const landmarkBoneMap={
+  0:['Hand_L_Wrist',false],
+  1:['Hand_L_thumb_CMC/MCP',false],2:['Hand_L_thumb_PIP',false],3:['Hand_L_thumb_DIP',false],4:['Hand_L_thumb_DIP',true],
+  5:['Hand_L_index_CMC/MCP',false],6:['Hand_L_index_PIP',false],7:['Hand_L_index_DIP',false],8:['Hand_L_index_DIP',true],
+  9:['Hand_L_middle_CMC/MCP',false],10:['Hand_L_middle_PIP',false],11:['Hand_L_middle_DIP',false],12:['Hand_L_middle_DIP',true],
+  13:['Hand_L_ring_CMC/MCP',false],14:['Hand_L_ring_PIP',false],15:['Hand_L_ring_DIP',false],16:['Hand_L_ring_DIP',true],
+  17:['Hand_L_pinky_CMC/MCP',false],18:['Hand_L_pinky_PIP',false],19:['Hand_L_pinky_DIP',false],20:['Hand_L_pinky_DIP',true]
+};
+function updateDebugPoints(lm){
+ if(!debugVisible||!lm||!handRoot)return;
+ // Put the MediaPipe target dots on a camera-facing reference plane. This is a
+ // visual comparison of screen-space position, not a claim of true metric depth.
+ const stage=document.querySelector('.stage'), h=stage.clientHeight, aspect=stage.clientWidth/Math.max(1,h);
+ const distance=Math.max(.1,camera.position.distanceTo(controls.target));
+ const visibleH=2*distance*Math.tan(THREE.MathUtils.degToRad(camera.fov/2)), visibleW=visibleH*aspect;
+ const right=new THREE.Vector3(1,0,0).applyQuaternion(camera.quaternion);
+ const up=new THREE.Vector3(0,1,0).applyQuaternion(camera.quaternion);
+ const planeCenter=controls.target.clone();
+ for(let i=0;i<21;i++){
+   const p=lm[i];
+   const x=(.5-p.x)*visibleW, y=(.5-p.y)*visibleH;
+   targetDots[i].position.copy(planeCenter).addScaledVector(right,x).addScaledVector(up,y);
+   targetDots[i].visible=true;
+   const entry=landmarkBoneMap[i];let world=null;
+   if(entry){const b=bones[entry[0]];if(b){handRoot.updateMatrixWorld(true);world=b.getWorldPosition(new THREE.Vector3());if(entry[1]){const child=b.children.find(c=>c.isBone);if(child)world=child.getWorldPosition(new THREE.Vector3());}}}
+   if(world){modelDots[i].position.copy(world);modelDots[i].visible=true;}else modelDots[i].visible=false;
+ }
+}
+function hideDebugPoints(){for(const m of [...targetDots,...modelDots])m.visible=false;}
+
 function driveBones(lm){
  if(!handRoot)return;
  fitRootToLandmarks(lm);
@@ -146,10 +187,12 @@ function driveBones(lm){
    handRoot.updateMatrixWorld(true);
   }
  }
+ handRoot.updateMatrixWorld(true);
+ updateDebugPoints(lm);
 }
 async function startTracking(){if(tracking)return;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('このブラウザーではカメラが利用できません。HTTPSで開いてください。');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:640},height:{ideal:480}},audio:false});video.srcObject=stream;await video.play();video.classList.add('visible');
  if(typeof Hands==='undefined')throw new Error('MediaPipeを読み込めませんでした。ネットワーク接続を確認してください。');
- mpHands=new Hands({locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`});mpHands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:.55,minTrackingConfidence:.5});mpHands.onResults(results=>{if(!tracking)return;const lm=results.multiHandLandmarks?.[0];if(lm){driveBones(lm);status('カメラ追従中：手を動かすと3Dモデルが追従します。');}else status('手が見つかりません。カメラに手のひらを向けてください。');});
+ mpHands=new Hands({locateFile:(file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`});mpHands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:.55,minTrackingConfidence:.5});mpHands.onResults(results=>{if(!tracking)return;const lm=results.multiHandLandmarks?.[0];if(lm){driveBones(lm);status('カメラ追従中：青＝認識座標、オレンジ＝モデル関節。');}else{hideDebugPoints();status('手が見つかりません。カメラに手のひらを向けてください。');}});
  tracking=true;manualMode=false;document.querySelector('#start').disabled=true;document.querySelector('#stop').disabled=false;status('カメラ追従中…');
  const tick=async()=>{if(!tracking)return;if(video.readyState>=2){try{await mpHands.send({image:video})}catch(e){console.error(e)}}requestAnimationFrame(tick)};tick();
  }catch(e){console.error(e);stopTracking();status('カメラを開始できません：'+e.message,true)}}
