@@ -139,7 +139,27 @@ function updateDebugPoints(lm){
    targetDots[i].position.copy(planeCenter).addScaledVector(right,x).addScaledVector(up,y);
    targetDots[i].visible=true;
    const entry=landmarkBoneMap[i];let world=null;
-   if(entry){const b=bones[entry[0]];if(b){handRoot.updateMatrixWorld(true);world=b.getWorldPosition(new THREE.Vector3());if(entry[1]){const child=b.children.find(c=>c.isBone);if(child)world=child.getWorldPosition(new THREE.Vector3());}}}
+   if(entry){
+     const b=bones[entry[0]];
+     if(b){
+       handRoot.updateMatrixWorld(true);
+       world=b.getWorldPosition(new THREE.Vector3());
+       if(entry[1]){
+         // This rig has no dedicated fingertip bone. Estimate the fingertip
+         // beyond the DIP joint instead of accidentally plotting the DIP/base.
+         const child=b.children.find(c=>c.isBone);
+         if(child){
+           world=child.getWorldPosition(new THREE.Vector3());
+         }else if(b.parent?.isBone){
+           const parentPos=b.parent.getWorldPosition(new THREE.Vector3());
+           const dipPos=b.getWorldPosition(new THREE.Vector3());
+           const segment=dipPos.clone().sub(parentPos);
+           const estimatedTipLength=segment.length()*0.72;
+           if(segment.lengthSq()>1e-8) world=dipPos.add(segment.normalize().multiplyScalar(estimatedTipLength));
+         }
+       }
+     }
+   }
    if(world){modelDots[i].position.copy(world);modelDots[i].visible=true;}else modelDots[i].visible=false;
  }
 }
@@ -163,7 +183,7 @@ function driveBones(lm){
   const pairs=ids[finger];
   for(let j=0;j<3;j++){
    const bone=getFingerBone(finger,j); if(!bone)continue;
-   const child=bone.children.find(c=>c.isBone); if(!child)continue;
+   const child=bone.children.find(c=>c.isBone);
    const lmDir=landmarkVector(lm,pairs[j][0],pairs[j][1]);
    // Map image-plane motion into the mirrored model's local hand frame.
    const hx=lmDir.x*across.x+lmDir.y*across.y;
@@ -173,8 +193,18 @@ function driveBones(lm){
    const targetWorld=localToWorldDir(targetLocal);
    handRoot.updateMatrixWorld(true); bone.updateWorldMatrix(true,false); child.updateWorldMatrix(true,false);
    const bonePos=bone.getWorldPosition(new THREE.Vector3());
-   const childPos=child.getWorldPosition(new THREE.Vector3());
-   const currentWorld=childPos.sub(bonePos).normalize();
+   let currentWorld;
+   if(child){
+     const childPos=child.getWorldPosition(new THREE.Vector3());
+     currentWorld=childPos.sub(bonePos).normalize();
+   }else if(bone.parent?.isBone){
+     // Terminal DIP bones have no child joint; use the incoming bone axis as
+     // a stable proxy so the final phalanx is not silently skipped.
+     const parentPos=bone.parent.getWorldPosition(new THREE.Vector3());
+     currentWorld=bonePos.sub(parentPos).normalize();
+   }else{
+     continue;
+   }
    if(currentWorld.lengthSq()<1e-8)continue;
    // Rotate the existing world-space segment toward the matching MediaPipe segment,
    // then convert the result back into the bone parent's local coordinate frame.
