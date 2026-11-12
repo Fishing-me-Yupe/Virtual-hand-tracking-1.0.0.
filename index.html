@@ -249,6 +249,29 @@
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(S.fov, aspect, 0.02, 5);
   }
+  // スキニングの差し替え (頂点シェーダー)。
+  //  ・通常の線形ブレンドは、曲げた関節で断面が痩せる (絞り出したように細くなる)。
+  //  ・rc = (指の軸から頂点へのベクトル, 補正の強さ)。ブレンド後も「軸からの距離」を元の太さに戻す。
+  //  ・outline のときは、さらに法線方向へ押し出して輪郭線にする (反転ハル法)。
+  const SKIN_GLSL = `
+#ifdef USE_SKINNING
+{
+  vec4 k_pv = bindMatrix * vec4( transformed, 1.0 );
+  vec4 k_pc = bindMatrix * vec4( transformed - rc.xyz, 1.0 );
+  vec4 k_sv = boneMatX * k_pv * skinWeight.x + boneMatY * k_pv * skinWeight.y + boneMatZ * k_pv * skinWeight.z + boneMatW * k_pv * skinWeight.w;
+  vec4 k_sc = boneMatX * k_pc * skinWeight.x + boneMatY * k_pc * skinWeight.y + boneMatZ * k_pc * skinWeight.z + boneMatW * k_pc * skinWeight.w;
+  float k_el = length( mat3( boneMatX ) * rc.xyz ) * skinWeight.x + length( mat3( boneMatY ) * rc.xyz ) * skinWeight.y
+             + length( mat3( boneMatZ ) * rc.xyz ) * skinWeight.z + length( mat3( boneMatW ) * rc.xyz ) * skinWeight.w;
+  vec3 k_rr = k_sv.xyz - k_sc.xyz;
+  vec3 k_res = mix( k_sv.xyz, k_sc.xyz + k_rr * min( k_el / max( length( k_rr ), 1e-7 ), 2.2 ), rc.w );
+  transformed = ( bindMatrixInverse * vec4( k_res, 1.0 ) ).xyz;
+}
+#endif`;
+  function patchSkin(sh, outline) {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec4 rc;' + (outline ? '\nattribute float ow;\nuniform float uOutW;' : ''))
+      .replace('#include <skinning_vertex>', SKIN_GLSL + (outline ? '\n#ifdef USE_SKINNING\ntransformed += normalize( objectNormal ) * ow * uOutW;\n#endif' : ''));
+  }
   function disposeHands() {
     for (const h of Object.values(hn)) {
       scene.remove(h.skinMesh, h.outMesh);
@@ -274,6 +297,7 @@
       geom.setAttribute('normal', new THREE.BufferAttribute(d.nor, 3));
       geom.setAttribute('color', new THREE.BufferAttribute(new Float32Array(d.col), 3));
       geom.setAttribute('ow', new THREE.BufferAttribute(d.ow, 1));
+      geom.setAttribute('rc', new THREE.BufferAttribute(w.rc, 4));
       geom.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(w.idx, 4));
       geom.setAttribute('skinWeight', new THREE.Float32BufferAttribute(w.wt, 4));
       geom.setIndex(new THREE.BufferAttribute(d.idx, 1));
@@ -284,12 +308,10 @@
       const skinMat = new THREE.MeshBasicMaterial({ vertexColors: true, color: S.skin });
       const ou = { value: 0.0004 };
       const outMat = new THREE.MeshBasicMaterial({ color: S.outlineColor, side: THREE.BackSide });
-      outMat.onBeforeCompile = (sh) => {            // 反転ハル法: スキニング後に法線方向へ押し出す
-        sh.uniforms.uOutW = ou;
-        sh.vertexShader = sh.vertexShader
-          .replace('#include <common>', '#include <common>\nattribute float ow;\nuniform float uOutW;')
-          .replace('#include <skinning_vertex>', '#include <skinning_vertex>\n#ifdef USE_SKINNING\ntransformed += normalize(objectNormal) * ow * uOutW;\n#endif');
-      };
+      skinMat.onBeforeCompile = (sh) => patchSkin(sh, false);
+      skinMat.customProgramCacheKey = () => 'handSkin';
+      outMat.onBeforeCompile = (sh) => { sh.uniforms.uOutW = ou; patchSkin(sh, true); };
+      outMat.customProgramCacheKey = () => 'handOutline';
       const skinMesh = new THREE.SkinnedMesh(geom, skinMat), outMesh = new THREE.SkinnedMesh(geom, outMat);
       for (const m of [skinMesh, outMesh]) { m.frustumCulled = false; m.bind(skeleton, new THREE.Matrix4()); m.visible = false; scene.add(m); }
       hn[side] = { side, skel, geom, bones, skeleton, skinMat, outMat, skinMesh, outMesh, ou, t, n,

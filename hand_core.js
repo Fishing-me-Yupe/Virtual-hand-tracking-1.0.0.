@@ -183,38 +183,55 @@
   // ---------------------------------------------------------------------------
   function computeWeights(pos, skel) {
     const n = pos.length / 3;
-    const idx = new Uint16Array(n * 4), wt = new Float32Array(n * 4);
+    const idx = new Uint16Array(n * 4), wt = new Float32Array(n * 4), rc = new Float32Array(n * 4);
     const F = skel.fingers;
+    const ratio = new Float64Array(5), sArr = new Float64Array(5), cp = new Float64Array(15);
+    const infl = (f) => 1 - smooth(f === 0 ? 1.7 : 1.45, f === 0 ? 2.8 : 2.1, ratio[f]);
+    const base = (f) => infl(f) * smooth(-F[f].R[0] * (f === 0 ? 1.6 : 1.2), F[f].R[0] * (f === 0 ? 1.6 : 1.2), sArr[f]);
     for (let v = 0; v < n; v++) {
       const px = pos[3 * v], py = pos[3 * v + 1], pz = pos[3 * v + 2];
-      let best = 1e9, bf = 0, bs = 0;
-      for (let f = 0; f < 5; f++) {
+      for (let f = 0; f < 5; f++) {                      // 指ごとに、軸 (3節のカプセル) までの最短を求める
         const fg = F[f];
-        let cumL = 0;
+        let best = 1e9, bs = 0, cumL = 0;
         for (let k = 0; k < 3; k++) {
           const a = fg.pts[k], b = fg.pts[k + 1];
           const bx = b[0] - a[0], by = b[1] - a[1], bz = b[2] - a[2];
           const t = ((px - a[0]) * bx + (py - a[1]) * by + (pz - a[2]) * bz) / (fg.L[k] * fg.L[k]);
           const tc = t < 0 ? 0 : t > 1 ? 1 : t;
-          const dx = px - (a[0] + bx * tc), dy = py - (a[1] + by * tc), dz = pz - (a[2] + bz * tc);
+          const qx = a[0] + bx * tc, qy = a[1] + by * tc, qz = a[2] + bz * tc;
+          const dx = px - qx, dy = py - qy, dz = pz - qz;
           const r = fg.R[k] + (fg.R[k + 1] - fg.R[k]) * tc;
-          const ratio = Math.sqrt(dx * dx + dy * dy + dz * dz) / r;
-          if (ratio < best) { best = ratio; bf = f; bs = cumL + t * fg.L[k]; }
+          const ra = Math.sqrt(dx * dx + dy * dy + dz * dz) / r;
+          if (ra < best) { best = ra; bs = cumL + t * fg.L[k]; cp[3 * f] = qx; cp[3 * f + 1] = qy; cp[3 * f + 2] = qz; }
           cumL += fg.L[k];
         }
+        ratio[f] = best; sArr[f] = bs;
       }
-      const fg = F[bf], thumb = bf === 0;
-      const infl = 1 - smooth(thumb ? 1.7 : 1.45, thumb ? 2.8 : 2.1, best);
-      const w0 = fg.R[0] * (thumb ? 1.6 : 0.9);
-      const Fw = infl * smooth(-w0, w0, bs);
-      const j1 = fg.L[0], j2 = fg.L[0] + fg.L[1];
-      const wA = smooth(j1 - fg.R[1] * 1.0, j1 + fg.R[1] * 1.0, bs);
-      const wB = smooth(j2 - fg.R[2] * 0.9, j2 + fg.R[2] * 0.9, bs);
-      const o = 4 * v, b0 = 1 + 3 * bf;
-      idx[o] = 0; idx[o + 1] = b0; idx[o + 2] = b0 + 1; idx[o + 3] = b0 + 2;
-      wt[o] = 1 - Fw; wt[o + 1] = Fw * (1 - wA); wt[o + 2] = Fw * (wA - wB); wt[o + 3] = Fw * wB;
+      let A = 0; for (let f = 1; f < 5; f++) if (ratio[f] < ratio[A]) A = f;
+      let B = -1; for (let f = 0; f < 5; f++) if (f !== A && (B < 0 || ratio[f] < ratio[B])) B = f;
+      const fa = F[A], fb = F[B];
+      const FA = base(A), FB = base(B);
+      const j1 = fa.L[0], j2 = fa.L[0] + fa.L[1];
+      const wA = smooth(j1 - fa.R[1], j1 + fa.R[1], sArr[A]);
+      const wB = smooth(j2 - fa.R[2] * 0.9, j2 + fa.R[2] * 0.9, sArr[A]);
+      // 付け根付近の「指と指の間」は、両側の指の第1節で滑らかに分け合う (片方に固定すると曲げたときに裂ける)
+      const shareA = smooth(-0.5, 0.5, ratio[B] - ratio[A]);
+      let sb = (1 - shareA) * (1 - smooth(0.35 * j1, 0.7 * j1, sArr[A])) * (1 - smooth(0.35 * fb.L[0], 0.7 * fb.L[0], sArr[B]));
+      if (wA > 1e-4) sb = 0;
+      const cA = FA * (1 - sb), cB = FB * sb;
+      const o = 4 * v, a0 = 1 + 3 * A, b0 = 1 + 3 * B;
+      idx[o] = 0; idx[o + 1] = a0;
+      wt[o] = 1 - cA - cB; wt[o + 1] = cA * (1 - wA);
+      if (sb > 0) { idx[o + 2] = b0; idx[o + 3] = a0 + 2; wt[o + 2] = cB; wt[o + 3] = 0; }
+      else { idx[o + 2] = a0 + 1; idx[o + 3] = a0 + 2; wt[o + 2] = cA * (wA - wB); wt[o + 3] = cA * wB; }
+      // 体積補正用: 軸から頂点へのベクトル (休止姿勢) と、補正の強さ
+      // 補正は指の胴体だけに効かせる。付け根の手前・指と指の間 (隣の指の軸に切り替わる場所) では 0 にして、継ぎ目を作らない
+      const thumbA = A === 0;
+      const body = 1 - smooth(thumbA ? 1.5 : 1.15, thumbA ? 2.2 : 1.5, ratio[A]);
+      const kk = body * smooth(0, 0.8 * fa.R[0], sArr[A]) * (1 - 2 * sb);
+      rc[o] = px - cp[3 * A]; rc[o + 1] = py - cp[3 * A + 1]; rc[o + 2] = pz - cp[3 * A + 2]; rc[o + 3] = kk;
     }
-    return { idx, wt };
+    return { idx, wt, rc };
   }
 
   // ---------------------------------------------------------------------------
@@ -297,19 +314,31 @@
     return { M: out, sp };
   }
 
-  // 検証用の CPU スキニング
-  function applySkin(pos, idx, wt, M, out) {
+  // 検証用の CPU スキニング。シェーダーと同じ式 (rc を渡すと体積補正が入る)
+  function applySkin(pos, idx, wt, M, out, rc) {
     const n = pos.length / 3;
     out = out || new Float32Array(pos.length);
     for (let v = 0; v < n; v++) {
       const x = pos[3 * v], y = pos[3 * v + 1], z = pos[3 * v + 2];
-      let ox = 0, oy = 0, oz = 0;
+      const rx = rc ? rc[4 * v] : 0, ry = rc ? rc[4 * v + 1] : 0, rz = rc ? rc[4 * v + 2] : 0, k = rc ? rc[4 * v + 3] : 0;
+      let ox = 0, oy = 0, oz = 0, cx = 0, cy = 0, cz = 0, el = 0;
       for (let j = 0; j < 4; j++) {
         const w = wt[4 * v + j]; if (w === 0) continue;
         const m = idx[4 * v + j] * 16;
         ox += w * (M[m] * x + M[m + 4] * y + M[m + 8] * z + M[m + 12]);
         oy += w * (M[m + 1] * x + M[m + 5] * y + M[m + 9] * z + M[m + 13]);
         oz += w * (M[m + 2] * x + M[m + 6] * y + M[m + 10] * z + M[m + 14]);
+        if (k > 0) {
+          const ax = x - rx, ay = y - ry, az = z - rz;
+          cx += w * (M[m] * ax + M[m + 4] * ay + M[m + 8] * az + M[m + 12]);
+          cy += w * (M[m + 1] * ax + M[m + 5] * ay + M[m + 9] * az + M[m + 13]);
+          cz += w * (M[m + 2] * ax + M[m + 6] * ay + M[m + 10] * az + M[m + 14]);
+          el += w * Math.hypot(M[m] * rx + M[m + 4] * ry + M[m + 8] * rz, M[m + 1] * rx + M[m + 5] * ry + M[m + 9] * rz, M[m + 2] * rx + M[m + 6] * ry + M[m + 10] * rz);
+        }
+      }
+      if (k > 0) {
+        const dx = ox - cx, dy = oy - cy, dz = oz - cz, f = Math.min(el / Math.max(Math.hypot(dx, dy, dz), 1e-7), 2.2);
+        ox += (cx + dx * f - ox) * k; oy += (cy + dy * f - oy) * k; oz += (cz + dz * f - oz) * k;
       }
       out[3 * v] = ox; out[3 * v + 1] = oy; out[3 * v + 2] = oz;
     }
